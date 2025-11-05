@@ -343,19 +343,27 @@ class LiteLLMClient(LLMClient):
 
         return resolved
 
-    def complete(self, prompt: str, **kwargs: Any) -> LLMResponse:
+    def complete(self, prompt: str, system: Optional[str] = None, **kwargs: Any) -> LLMResponse:
         """
         Generate completion for the given prompt.
 
         Args:
             prompt: Input prompt text
+            system: Optional system message to prepend to the conversation
             **kwargs: Additional parameters to pass to the model
 
         Returns:
             LLMResponse containing the generated text and metadata
         """
         # Prepare messages in chat format (most models now use this)
-        messages = [{"role": "user", "content": prompt}]
+        messages = []
+
+        # Add system message if provided
+        if system:
+            messages.append({"role": "system", "content": system})
+
+        # Add user message
+        messages.append({"role": "user", "content": prompt})
 
         # Merge config with runtime kwargs
         merged_params = {
@@ -442,19 +450,27 @@ class LiteLLMClient(LLMClient):
             logger.error(f"Error in LiteLLM completion: {e}")
             raise
 
-    async def acomplete(self, prompt: str, **kwargs: Any) -> LLMResponse:
+    async def acomplete(self, prompt: str, system: Optional[str] = None, **kwargs: Any) -> LLMResponse:
         """
         Async version of complete.
 
         Args:
             prompt: Input prompt text
+            system: Optional system message to prepend to the conversation
             **kwargs: Additional parameters to pass to the model
 
         Returns:
             LLMResponse containing the generated text and metadata
         """
         # Prepare messages in chat format
-        messages = [{"role": "user", "content": prompt}]
+        messages = []
+
+        # Add system message if provided
+        if system:
+            messages.append({"role": "system", "content": system})
+
+        # Add user message
+        messages.append({"role": "user", "content": prompt})
 
         # Merge config with runtime kwargs
         merged_params = {

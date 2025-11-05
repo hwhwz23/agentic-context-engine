@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence
@@ -16,6 +17,8 @@ from .roles import (
     Reflector,
     ReflectorOutput,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -366,6 +369,8 @@ class OfflineAdapter(AdapterBase):
         samples: Sequence[Sample],
         environment: TaskEnvironment,
         epochs: int = 1,
+        checkpoint_interval: Optional[int] = None,
+        checkpoint_dir: Optional[str] = None,
     ) -> List[AdapterStepResult]:
         """
         Run offline adaptation over training samples.
@@ -374,6 +379,8 @@ class OfflineAdapter(AdapterBase):
             samples: Training samples to process
             environment: Environment for evaluating generator outputs
             epochs: Number of times to iterate over samples (default: 1)
+            checkpoint_interval: Save playbook every N successful samples (optional)
+            checkpoint_dir: Directory to save checkpoints (required if checkpoint_interval set)
 
         Returns:
             List of AdapterStepResult for each processed sample
@@ -381,20 +388,58 @@ class OfflineAdapter(AdapterBase):
         Note:
             The playbook is updated in-place during adaptation.
             Access the evolved playbook via adapter.playbook after running.
+            Failed samples are skipped and logged, training continues.
         """
+        from pathlib import Path
+
         results: List[AdapterStepResult] = []
+        failed_samples: List[tuple] = []  # Track (epoch, step_idx, error) for failed samples
         total_steps = len(samples)
+
+        # Validate checkpoint parameters
+        if checkpoint_interval is not None and checkpoint_dir is None:
+            raise ValueError("checkpoint_dir must be provided when checkpoint_interval is set")
+
         for epoch_idx in range(1, epochs + 1):
             for step_idx, sample in enumerate(samples, start=1):
-                result = self._process_sample(
-                    sample,
-                    environment,
-                    epoch=epoch_idx,
-                    total_epochs=epochs,
-                    step_index=step_idx,
-                    total_steps=total_steps,
-                )
-                results.append(result)
+                try:
+                    result = self._process_sample(
+                        sample,
+                        environment,
+                        epoch=epoch_idx,
+                        total_epochs=epochs,
+                        step_index=step_idx,
+                        total_steps=total_steps,
+                    )
+                    results.append(result)
+
+                    # Save checkpoint if interval reached
+                    if checkpoint_interval and checkpoint_dir and len(results) % checkpoint_interval == 0:
+                        checkpoint_path = Path(checkpoint_dir)
+                        numbered_checkpoint = checkpoint_path / f"convex_checkpoint_{len(results)}.json"
+                        latest_checkpoint = checkpoint_path / "convex_latest.json"
+
+                        self.playbook.save_to_file(str(numbered_checkpoint))
+                        self.playbook.save_to_file(str(latest_checkpoint))
+                        logger.info(f"Checkpoint saved: {len(results)} samples → {numbered_checkpoint.name}")
+
+                except Exception as e:
+                    # Log error and continue to next sample
+                    logger.warning(
+                        f"Failed to process sample {step_idx}/{total_steps} "
+                        f"in epoch {epoch_idx}/{epochs}: {type(e).__name__}: {str(e)[:200]}"
+                    )
+                    failed_samples.append((epoch_idx, step_idx, str(e)[:100]))
+                    continue
+
+        # Report failure summary if any samples failed
+        if failed_samples:
+            logger.info(
+                f"Training completed with {len(failed_samples)} failed samples "
+                f"out of {len(samples) * epochs} total attempts"
+            )
+            logger.debug(f"Failed samples: {failed_samples}")
+
         return results
 
 
